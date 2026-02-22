@@ -8,7 +8,7 @@ import os
 # 嘗試導入 PDF 處理庫
 try:
     import PyPDF2
-    from claude_extractor import extract_legal_questions_from_text
+    from gemini_pdf_extractor import extract_legal_questions_with_gemini_vision
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
@@ -51,7 +51,7 @@ def load_google_sheets(sheet_id):
 
 # ==================== PDF 處理函數 ====================
 def extract_legal_questions_from_pdf(pdf_file):
-    """使用 Claude AI 從 PDF 文字提取法律題目"""
+    """使用 Gemini Vision AI 從 PDF 文字提取法律題目"""
     if not PDF_AVAILABLE:
         st.error("❌ PDF 處理庫未安裝")
         return []
@@ -61,8 +61,8 @@ def extract_legal_questions_from_pdf(pdf_file):
         pdf_bytes = pdf_file.read()
         filename = pdf_file.name
         
-        # 使用 Claude AI 提取
-        questions = extract_legal_questions_from_text(pdf_bytes, filename)
+        # 使用 Gemini Vision AI 提取
+        questions = extract_legal_questions_with_gemini_vision(pdf_bytes, filename)
         
         return questions
     except Exception as e:

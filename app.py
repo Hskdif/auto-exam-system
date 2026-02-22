@@ -20,6 +20,9 @@ import os
 # 嘗試導入 PDF 處理庫
 try:
     import PyPDF2
+    from pdf2image import convert_from_bytes
+    import pytesseract
+    from pdf_extractor import extract_legal_questions
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
@@ -98,66 +101,23 @@ def load_google_sheets(sheet_id):
         return None
 
 # ==================== PDF 處理函數 ====================
-def extract_text_from_pdf(pdf_file):
-    """從 PDF 提取文字"""
+def extract_legal_questions_from_pdf(pdf_file):
+    """使用專業法律提取器提取 PDF 中的題目"""
     if not PDF_AVAILABLE:
-        return None
+        return []
     
     try:
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
-        text = ""
-        for page in pdf_reader.pages:
-            text += page.extract_text() + "\n"
-        return text
+        # 讀取 PDF 檔案
+        pdf_bytes = pdf_file.read()
+        filename = pdf_file.name
+        
+        # 使用高級提取器
+        questions = extract_legal_questions(pdf_bytes, filename)
+        
+        return questions
     except Exception as e:
         st.error(f"❌ PDF 提取失敗：{str(e)}")
-        return None
-
-def parse_questions_from_text(text, filename):
-    """從文字中解析題目"""
-    questions = []
-    
-    # 嘗試從檔名提取日期和題號
-    # 格式：月份_日期_第幾題.pdf 或 12月15號第1題.pdf
-    date_match = re.search(r'(\d{1,2})月(\d{1,2})[號日]', filename)
-    question_num_match = re.search(r'第(\d+)題', filename)
-    
-    month = date_match.group(1) if date_match else "未知"
-    day = date_match.group(2) if date_match else "未知"
-    question_num = question_num_match.group(1) if question_num_match else "1"
-    
-    # 簡單的題目解析邏輯
-    # 假設題目格式為：題目內容\n答案：...
-    lines = text.split('\n')
-    
-    question_content = ""
-    answer_content = ""
-    in_answer = False
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        
-        if '答案' in line or '解答' in line or '答' in line:
-            in_answer = True
-            answer_content += line + " "
-        elif in_answer:
-            answer_content += line + " "
-        else:
-            question_content += line + " "
-    
-    if question_content:
-        questions.append({
-            'ID': f"PDF_{month}月{day}號_第{question_num}題",
-            '類型': '申論題',
-            '科目': '法律',
-            '題目內容': question_content.strip()[:200],  # 限制長度
-            '參考解答': answer_content.strip()[:300] if answer_content else '待補充',
-            '分數': 50
-        })
-    
-    return questions
+        return []
 
 # ==================== 核心邏輯 ====================
 def generate_exam(df, target_score, selected_subjects, selected_types):
@@ -353,14 +313,20 @@ def main():
                 for uploaded_file in uploaded_files:
                     st.write(f"📄 處理：{uploaded_file.name}")
                     
-                    # 提取文字
-                    text = extract_text_from_pdf(uploaded_file)
+                    # 使用高級法律提取器
+                    questions = extract_legal_questions_from_pdf(uploaded_file)
                     
-                    if text:
-                        # 解析題目
-                        questions = parse_questions_from_text(text, uploaded_file.name)
+                    if questions:
                         all_extracted_questions.extend(questions)
                         st.success(f"✅ 已提取 {len(questions)} 題")
+                        
+                        # 顯示提取的題目詳情
+                        with st.expander(f"📄 {uploaded_file.name} - 提取的題目"):
+                            for i, q in enumerate(questions, 1):
+                                st.write(f"**題 {i}** ({q['科目']} | {q['類型']})")
+                                st.write(f"**題目：** {q['題目內容'][:200]}...")
+                                if q['參考解答'] and q['參考解答'] != '待補充':
+                                    st.write(f"**解答：** {q['參考解答'][:200]}...")
                     else:
                         st.error(f"❌ 無法提取 {uploaded_file.name}")
                 

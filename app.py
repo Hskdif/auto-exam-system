@@ -21,8 +21,7 @@ import os
 try:
     import PyPDF2
     from pdf2image import convert_from_bytes
-    import pytesseract
-    from pdf_extractor import extract_legal_questions
+    from gemini_extractor import extract_legal_questions_with_gemini
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
@@ -102,7 +101,7 @@ def load_google_sheets(sheet_id):
 
 # ==================== PDF 處理函數 ====================
 def extract_legal_questions_from_pdf(pdf_file):
-    """使用專業法律提取器提取 PDF 中的題目"""
+    """使用 Gemini/Claude AI 提取 PDF 中的題目"""
     if not PDF_AVAILABLE:
         return []
     
@@ -111,12 +110,14 @@ def extract_legal_questions_from_pdf(pdf_file):
         pdf_bytes = pdf_file.read()
         filename = pdf_file.name
         
-        # 使用高級提取器
-        questions = extract_legal_questions(pdf_bytes, filename)
+        # 使用 Gemini/Claude AI 提取
+        # API Key 從環境變數自動讀取
+        questions = extract_legal_questions_with_gemini(pdf_bytes, filename)
         
         return questions
     except Exception as e:
         st.error(f"❌ PDF 提取失敗：{str(e)}")
+        st.error(f"詳情：{str(e)}")
         return []
 
 # ==================== 核心邏輯 ====================

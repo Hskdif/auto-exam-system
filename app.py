@@ -20,8 +20,7 @@ import os
 # 嘗試導入 PDF 處理庫
 try:
     import PyPDF2
-    from pdf2image import convert_from_bytes
-    from gemini_extractor import extract_legal_questions_with_gemini
+    from claude_extractor import extract_legal_questions_from_text
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
@@ -101,8 +100,9 @@ def load_google_sheets(sheet_id):
 
 # ==================== PDF 處理函數 ====================
 def extract_legal_questions_from_pdf(pdf_file):
-    """使用 Gemini/Claude AI 提取 PDF 中的題目"""
+    """使用 Claude AI 從 PDF 文字提取法律題目"""
     if not PDF_AVAILABLE:
+        st.error("❌ PDF 處理庫未安裝")
         return []
     
     try:
@@ -110,14 +110,21 @@ def extract_legal_questions_from_pdf(pdf_file):
         pdf_bytes = pdf_file.read()
         filename = pdf_file.name
         
-        # 使用 Gemini/Claude AI 提取
+        st.info("🤖 正在使用 Claude AI 分析 PDF...")
+        
+        # 使用 Claude AI 提取
         # API Key 從環境變數自動讀取
-        questions = extract_legal_questions_with_gemini(pdf_bytes, filename)
+        questions = extract_legal_questions_from_text(pdf_bytes, filename)
+        
+        if questions:
+            st.success(f"✅ 成功提取 {len(questions)} 題")
+        else:
+            st.warning("⚠️ PDF 中未找到題目")
         
         return questions
     except Exception as e:
         st.error(f"❌ PDF 提取失敗：{str(e)}")
-        st.error(f"詳情：{str(e)}")
+        st.info("💡 提示：API Key 可能未正確配置。請確保環境變數設置正確。")
         return []
 
 # ==================== 核心邏輯 ====================

@@ -14,6 +14,15 @@ import random
 from datetime import datetime
 from io import BytesIO
 import requests
+import re
+import os
+
+# 嘗試導入 PDF 處理庫
+try:
+    import PyPDF2
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
 
 # ==================== 頁面設定 ====================
 st.set_page_config(
@@ -43,6 +52,9 @@ st.markdown("""
         padding: 15px;
         margin: 10px 0;
         border-radius: 5px;
+    }
+    .tab-content {
+        padding: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -85,6 +97,68 @@ def load_google_sheets(sheet_id):
         st.error(f"❌ 錯誤：{str(e)}")
         return None
 
+# ==================== PDF 處理函數 ====================
+def extract_text_from_pdf(pdf_file):
+    """從 PDF 提取文字"""
+    if not PDF_AVAILABLE:
+        return None
+    
+    try:
+        pdf_reader = PyPDF2.PdfReader(pdf_file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text() + "\n"
+        return text
+    except Exception as e:
+        st.error(f"❌ PDF 提取失敗：{str(e)}")
+        return None
+
+def parse_questions_from_text(text, filename):
+    """從文字中解析題目"""
+    questions = []
+    
+    # 嘗試從檔名提取日期和題號
+    # 格式：月份_日期_第幾題.pdf 或 12月15號第1題.pdf
+    date_match = re.search(r'(\d{1,2})月(\d{1,2})[號日]', filename)
+    question_num_match = re.search(r'第(\d+)題', filename)
+    
+    month = date_match.group(1) if date_match else "未知"
+    day = date_match.group(2) if date_match else "未知"
+    question_num = question_num_match.group(1) if question_num_match else "1"
+    
+    # 簡單的題目解析邏輯
+    # 假設題目格式為：題目內容\n答案：...
+    lines = text.split('\n')
+    
+    question_content = ""
+    answer_content = ""
+    in_answer = False
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        if '答案' in line or '解答' in line or '答' in line:
+            in_answer = True
+            answer_content += line + " "
+        elif in_answer:
+            answer_content += line + " "
+        else:
+            question_content += line + " "
+    
+    if question_content:
+        questions.append({
+            'ID': f"PDF_{month}月{day}號_第{question_num}題",
+            '類型': '申論題',
+            '科目': '法律',
+            '題目內容': question_content.strip()[:200],  # 限制長度
+            '參考解答': answer_content.strip()[:300] if answer_content else '待補充',
+            '分數': 50
+        })
+    
+    return questions
+
 # ==================== 核心邏輯 ====================
 def generate_exam(df, target_score, selected_subjects, selected_types):
     """
@@ -125,135 +199,246 @@ def main():
     st.markdown('<h1 class="main-title">📝 自動化雲端出卷系統</h1>', unsafe_allow_html=True)
     st.markdown("---")
     
-    # 側邊欄設定
-    with st.sidebar:
-        st.header("⚙️ 設定")
+    # 建立 Tab
+    tab1, tab2, tab3 = st.tabs(["📚 出卷系統", "📥 上傳 PDF", "📊 題庫管理"])
+    
+    # ==================== Tab 1: 出卷系統 ====================
+    with tab1:
+        # 側邊欄設定
+        with st.sidebar:
+            st.header("⚙️ 設定")
+            
+            # Google Sheets ID 輸入
+            st.subheader("1️⃣ Google Sheets 題庫")
+            sheet_id = st.text_input(
+                "請輸入 Google Sheets ID",
+                placeholder="例如：1a2b3c4d5e6f7g8h9i0j",
+                help="從分享連結中複製 ID：https://docs.google.com/spreadsheets/d/[ID]/edit"
+            )
+            
+            if not sheet_id:
+                st.warning("⚠️ 請先輸入 Google Sheets ID")
+                return
+            
+            # 載入題庫
+            st.subheader("2️⃣ 載入題庫")
+            if st.button("🔄 載入題庫", use_container_width=True):
+                st.cache_data.clear()
+            
+            df = load_google_sheets(sheet_id)
+            
+            if df is None or df.empty:
+                st.error("❌ 無法載入題庫")
+                return
+            
+            st.success(f"✅ 成功載入 {len(df)} 題")
+            
+            # 篩選設定
+            st.subheader("3️⃣ 篩選設定")
+            
+            # 科目篩選
+            all_subjects = df['科目'].unique().tolist()
+            selected_subjects = st.multiselect(
+                "選擇科目",
+                all_subjects,
+                default=all_subjects,
+                key="subjects"
+            )
+            
+            # 題型篩選
+            all_types = df['類型'].unique().tolist()
+            selected_types = st.multiselect(
+                "選擇題型",
+                all_types,
+                default=all_types,
+                key="types"
+            )
+            
+            # 目標分數
+            st.subheader("4️⃣ 出卷設定")
+            target_score = st.slider(
+                "目標總分",
+                min_value=25,
+                max_value=500,
+                value=100,
+                step=25
+            )
         
-        # Google Sheets ID 輸入
-        st.subheader("1️⃣ Google Sheets 題庫")
-        sheet_id = st.text_input(
+        # 主要內容區域
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.subheader("📊 題庫統計")
+            
+            # 統計資訊
+            col_stat1, col_stat2, col_stat3 = st.columns(3)
+            with col_stat1:
+                st.metric("總題數", len(df))
+            with col_stat2:
+                st.metric("總分", df['分數'].sum())
+            with col_stat3:
+                st.metric("平均分數", f"{df['分數'].mean():.1f}")
+        
+        with col2:
+            st.subheader("🎲 隨機出卷")
+            if st.button("🎲 隨機生成考卷", use_container_width=True):
+                exam_df, exam_score = generate_exam(df, target_score, selected_subjects, selected_types)
+                
+                if exam_df is None or exam_df.empty:
+                    st.error("❌ 無法生成考卷，請調整篩選條件")
+                else:
+                    st.session_state.exam_df = exam_df
+                    st.session_state.exam_score = exam_score
+                    st.success(f"✅ 成功生成考卷（{exam_score} 分）")
+        
+        # 顯示生成的考卷
+        if 'exam_df' in st.session_state and st.session_state.exam_df is not None:
+            st.markdown("---")
+            st.subheader(f"📄 考卷預覽（{st.session_state.exam_score} 分）")
+            
+            # 顯示題目
+            for idx, row in st.session_state.exam_df.iterrows():
+                with st.container():
+                    st.markdown(f"""
+                    <div class="question-card">
+                        <strong>題 {idx + 1}</strong> | {row['科目']} | {row['類型']} | {row['分數']} 分
+                        <hr style="margin: 10px 0;">
+                        <p><strong>題目：</strong>{row['題目內容']}</p>
+                        <p><strong>參考解答：</strong>{row['參考解答']}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            # 匯出選項
+            st.markdown("---")
+            st.subheader("💾 匯出考卷")
+            
+            col_export1, col_export2 = st.columns(2)
+            
+            with col_export1:
+                if st.button("📥 下載為 CSV", use_container_width=True):
+                    csv = st.session_state.exam_df.to_csv(index=False, encoding='utf-8-sig')
+                    st.download_button(
+                        label="點擊下載 CSV",
+                        data=csv,
+                        file_name=f"考卷_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+            
+            with col_export2:
+                if st.button("📋 複製到剪貼板", use_container_width=True):
+                    st.info("✅ 已複製到剪貼板（請在文字編輯器中貼上）")
+    
+    # ==================== Tab 2: 上傳 PDF ====================
+    with tab2:
+        st.subheader("📥 上傳 PDF 並自動提取題目")
+        
+        if not PDF_AVAILABLE:
+            st.warning("⚠️ 系統未安裝 PDF 處理庫，無法上傳 PDF。請使用「出卷系統」功能。")
+            st.info("💡 你可以手動複製題目到 Google Sheets，或使用 CSV 匯入功能。")
+        else:
+            st.info("📌 說明：上傳 PDF 檔案，系統會自動提取題目內容並新增到題庫。")
+            
+            uploaded_files = st.file_uploader(
+                "選擇 PDF 檔案",
+                type=['pdf'],
+                accept_multiple_files=True
+            )
+            
+            if uploaded_files:
+                st.subheader(f"📄 已上傳 {len(uploaded_files)} 個檔案")
+                
+                all_extracted_questions = []
+                
+                for uploaded_file in uploaded_files:
+                    st.write(f"📄 處理：{uploaded_file.name}")
+                    
+                    # 提取文字
+                    text = extract_text_from_pdf(uploaded_file)
+                    
+                    if text:
+                        # 解析題目
+                        questions = parse_questions_from_text(text, uploaded_file.name)
+                        all_extracted_questions.extend(questions)
+                        st.success(f"✅ 已提取 {len(questions)} 題")
+                    else:
+                        st.error(f"❌ 無法提取 {uploaded_file.name}")
+                
+                if all_extracted_questions:
+                    st.markdown("---")
+                    st.subheader("📋 提取的題目預覽")
+                    
+                    # 顯示提取的題目
+                    for i, q in enumerate(all_extracted_questions, 1):
+                        st.write(f"**題 {i}**: {q['題目內容'][:100]}...")
+                    
+                    st.markdown("---")
+                    st.subheader("💾 匯出提取的題目")
+                    
+                    # 轉換為 CSV
+                    df_extracted = pd.DataFrame(all_extracted_questions)
+                    csv = df_extracted.to_csv(index=False, encoding='utf-8-sig')
+                    
+                    st.download_button(
+                        label="📥 下載提取的題目（CSV）",
+                        data=csv,
+                        file_name=f"提取題目_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+                    
+                    st.info("💡 提示：下載 CSV 後，可以在 Google Sheets 中匯入這些題目。")
+    
+    # ==================== Tab 3: 題庫管理 ====================
+    with tab3:
+        st.subheader("📊 題庫管理")
+        
+        st.info("💡 在這個頁面，你可以查看和管理你的題庫。")
+        
+        # 輸入 Google Sheets ID
+        sheet_id_mgmt = st.text_input(
             "請輸入 Google Sheets ID",
             placeholder="例如：1a2b3c4d5e6f7g8h9i0j",
-            help="從分享連結中複製 ID：https://docs.google.com/spreadsheets/d/[ID]/edit"
+            key="sheet_id_mgmt"
         )
         
-        if not sheet_id:
-            st.warning("⚠️ 請先輸入 Google Sheets ID")
-            return
-        
-        # 載入題庫
-        st.subheader("2️⃣ 載入題庫")
-        if st.button("🔄 載入題庫", use_container_width=True):
-            st.cache_data.clear()
-        
-        df = load_google_sheets(sheet_id)
-        
-        if df is None or df.empty:
-            st.error("❌ 無法載入題庫")
-            return
-        
-        st.success(f"✅ 成功載入 {len(df)} 題")
-        
-        # 篩選設定
-        st.subheader("3️⃣ 篩選設定")
-        
-        # 科目篩選
-        all_subjects = df['科目'].unique().tolist()
-        selected_subjects = st.multiselect(
-            "選擇科目",
-            all_subjects,
-            default=all_subjects,
-            key="subjects"
-        )
-        
-        # 題型篩選
-        all_types = df['類型'].unique().tolist()
-        selected_types = st.multiselect(
-            "選擇題型",
-            all_types,
-            default=all_types,
-            key="types"
-        )
-        
-        # 目標分數
-        st.subheader("4️⃣ 出卷設定")
-        target_score = st.slider(
-            "目標總分",
-            min_value=25,
-            max_value=500,
-            value=100,
-            step=25
-        )
-    
-    # 主要內容區域
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("📊 題庫統計")
-        
-        # 統計資訊
-        col_stat1, col_stat2, col_stat3 = st.columns(3)
-        with col_stat1:
-            st.metric("總題數", len(df))
-        with col_stat2:
-            st.metric("總分", df['分數'].sum())
-        with col_stat3:
-            st.metric("平均分數", f"{df['分數'].mean():.1f}")
-    
-    with col2:
-        st.subheader("🎲 隨機出卷")
-        if st.button("🎲 隨機生成考卷", use_container_width=True):
-            exam_df, exam_score = generate_exam(df, target_score, selected_subjects, selected_types)
+        if sheet_id_mgmt:
+            if st.button("📖 載入題庫", use_container_width=True):
+                st.cache_data.clear()
             
-            if exam_df is None or exam_df.empty:
-                st.error("❌ 無法生成考卷，請調整篩選條件")
-            else:
-                st.session_state.exam_df = exam_df
-                st.session_state.exam_score = exam_score
-                st.success(f"✅ 成功生成考卷（{exam_score} 分）")
-    
-    # 顯示生成的考卷
-    if 'exam_df' in st.session_state and st.session_state.exam_df is not None:
-        st.markdown("---")
-        st.subheader(f"📄 考卷預覽（{st.session_state.exam_score} 分）")
-        
-        # 顯示題目
-        for idx, row in st.session_state.exam_df.iterrows():
-            with st.container():
-                st.markdown(f"""
-                <div class="question-card">
-                    <strong>題 {idx + 1}</strong> | {row['科目']} | {row['類型']} | {row['分數']} 分
-                    <hr style="margin: 10px 0;">
-                    <p><strong>題目：</strong>{row['題目內容']}</p>
-                    <p><strong>參考解答：</strong>{row['參考解答']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        # 匯出選項
-        st.markdown("---")
-        st.subheader("💾 匯出考卷")
-        
-        col_export1, col_export2 = st.columns(2)
-        
-        with col_export1:
-            if st.button("📥 下載為 CSV", use_container_width=True):
-                csv = st.session_state.exam_df.to_csv(index=False, encoding='utf-8-sig')
-                st.download_button(
-                    label="點擊下載 CSV",
-                    data=csv,
-                    file_name=f"考卷_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-        
-        with col_export2:
-            if st.button("📋 複製到剪貼板", use_container_width=True):
-                st.info("✅ 已複製到剪貼板（請在文字編輯器中貼上）")
+            df_mgmt = load_google_sheets(sheet_id_mgmt)
+            
+            if df_mgmt is not None and not df_mgmt.empty:
+                st.success(f"✅ 成功載入 {len(df_mgmt)} 題")
+                
+                # 顯示統計
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("總題數", len(df_mgmt))
+                with col2:
+                    st.metric("總分", df_mgmt['分數'].sum())
+                with col3:
+                    st.metric("科目數", df_mgmt['科目'].nunique())
+                with col4:
+                    st.metric("題型數", df_mgmt['類型'].nunique())
+                
+                # 科目分佈
+                st.subheader("📊 科目分佈")
+                subject_dist = df_mgmt['科目'].value_counts()
+                st.bar_chart(subject_dist)
+                
+                # 題型分佈
+                st.subheader("📊 題型分佈")
+                type_dist = df_mgmt['類型'].value_counts()
+                st.bar_chart(type_dist)
+                
+                # 完整題庫表
+                st.subheader("📋 完整題庫")
+                st.dataframe(df_mgmt, use_container_width=True)
     
     # 頁腳
     st.markdown("---")
     st.markdown("""
     <div style="text-align: center; color: #888; font-size: 12px;">
-        <p>自動化雲端出卷系統 v1.0 | 由 Manus AI 開發</p>
+        <p>自動化雲端出卷系統 v2.0 | 由 Manus AI 開發</p>
         <p>📖 <a href="https://github.com/Hskdif/auto-exam-system" target="_blank">GitHub 儲存庫</a></p>
     </div>
     """, unsafe_allow_html=True)

@@ -316,10 +316,11 @@ def main():
             
             with col_export1:
                 if st.button("📥 下載為 CSV", use_container_width=True):
-                    csv = st.session_state.exam_df.to_csv(index=False, encoding='utf-8-sig')
+                    # 使用 UTF-8 BOM 編碼確保中文正確顯示
+                    csv_bytes = st.session_state.exam_df.to_csv(index=False).encode('utf-8-sig')
                     st.download_button(
                         label="點擊下載 CSV",
-                        data=csv,
+                        data=csv_bytes,
                         file_name=f"考卷_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv"
                     )
@@ -374,13 +375,13 @@ def main():
                     st.markdown("---")
                     st.subheader("💾 匯出提取的題目")
                     
-                    # 轉換為 CSV
+                    # 轉換為 CSV（使用 UTF-8 BOM 編碼）
                     df_extracted = pd.DataFrame(all_extracted_questions)
-                    csv = df_extracted.to_csv(index=False, encoding='utf-8-sig')
+                    csv_bytes = df_extracted.to_csv(index=False).encode('utf-8-sig')
                     
                     st.download_button(
                         label="📥 下載提取的題目（CSV）",
-                        data=csv,
+                        data=csv_bytes,
                         file_name=f"提取題目_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv"
                     )
